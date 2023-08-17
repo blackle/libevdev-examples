@@ -3,9 +3,14 @@
 #include <iostream>
 #include <string>
 #include <mutex>
+#include <set>
+#include <thread>
+#include <chrono>
+#include <atomic>
 #include <unistd.h>
 #include <fcntl.h>
 #include <grp.h>
+#include <math.h>
 
 class VirtualMouse {
 public:
@@ -83,7 +88,17 @@ struct libevdev* find_device_by_name(const std::string& requested_name) {
 	return nullptr;
 }
 
+std::set<int> g_pressedKeys;
+std::mutex g_pressed_keys_mutex;
+
 void process_key(int code, bool is_down) {
+	std::lock_guard<std::mutex> guard(g_pressed_keys_mutex);
+	if (is_down) {
+		g_pressedKeys.insert(code);
+	} else {
+		g_pressedKeys.erase(code);
+	}
+
 	if (code == 82) g_mouse.Click(BTN_LEFT, is_down);
 	if (code == 96) g_mouse.Click(BTN_RIGHT, is_down);
 	if (code == 83) g_mouse.Click(BTN_MIDDLE, is_down);
@@ -106,6 +121,50 @@ void process_events(struct libevdev *dev) {
 				process_key(ev.code, is_down);
 			}
 		}
+	}
+}
+
+std::atomic_bool g_run_mouse_thread;
+void mouse_thread_fn(void*) {
+	float rx = 0;
+	float ry = 0;
+	const float friction = 0.85;
+	const float accel = 1.2/friction;
+	while (g_run_mouse_thread) {
+		float dx = 0;
+		float dy = 0;
+
+		float rs = 0;
+
+		{
+			std::lock_guard<std::mutex> guard(g_pressed_keys_mutex);
+			if (g_pressedKeys.count(77) > 0) rx += accel;
+			if (g_pressedKeys.count(75) > 0) rx -= accel;
+			if (g_pressedKeys.count(76) > 0) ry += accel;
+			if (g_pressedKeys.count(72) > 0) ry -= accel;
+
+			if (g_pressedKeys.count(78) > 0) rs += 1;
+			if (g_pressedKeys.count(14) > 0) rs -= 1;
+		}
+
+		// resize movement vector to be length 1
+		if (fabs(dx)+fabs(dy) > accel) {
+			dx *= .7;
+			dy *= .7;
+		}
+
+		rx += dx;
+		ry += dy;
+		rx *= friction;
+		ry *= friction;
+
+		if (fabs(rx)+fabs(ry) > 0) {
+			g_mouse.Move(rx, ry);
+		}
+		if (fabs(rs) > 0) {
+			g_mouse.Scroll(rs);
+		}
+		std::this_thread::sleep_for(std::chrono::milliseconds(10));
 	}
 }
 
@@ -140,10 +199,17 @@ int main() {
 		return -1;
 	}
 
+	g_run_mouse_thread = true;
+	std::thread mouse_thread(mouse_thread_fn, nullptr);
+
 	libevdev_grab(dev, LIBEVDEV_GRAB);
 
 	process_events(dev);
 
 	libevdev_free(dev);
+
+	g_run_mouse_thread = false;
+	mouse_thread.join();
+
 	return 0;
 }
