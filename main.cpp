@@ -177,6 +177,7 @@ int main(int argc, char** argv) {
 				break;
 			}
 			libevdev_free(dev);
+			dev = nullptr;
 		}
 		close(fd);
 	}
@@ -208,7 +209,7 @@ int main(int argc, char** argv) {
 	int r = 0;
 	auto is_error = [](int v) { return v < 0 && v != -EAGAIN; };
 	auto has_next_event = [](int v) { return v >= 0; };
-	auto flags = LIBEVDEV_READ_FLAG_NORMAL | LIBEVDEV_READ_FLAG_BLOCKING;
+	const auto flags = LIBEVDEV_READ_FLAG_NORMAL | LIBEVDEV_READ_FLAG_BLOCKING;
 	while (r = libevdev_next_event(dev, flags, &ev), !is_error(r)) {
 		if (!has_next_event(r)) continue;
 		if (ev.type == 1) {
